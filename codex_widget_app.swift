@@ -164,6 +164,23 @@ final class ReasonPop: NSObject, WKNavigationDelegate {
     }
 }
 
+/// 大窗拖拽把手: titlebar 已隐藏(透明+fullSizeContentView), 需自管拖拽。
+/// 策略与悬浮窗把手一致: 顶部 30pt 全宽 = 拖拽, 其余透传 DOM。
+/// 顶部 30pt 区域内容 = 红绿灯(左 0~70pt) + 页面标题行(padding-left:78px 起)——标题文字区域可拖, 不与 KPI/图表/按钮冲突。
+final class DashDragWebView: WKWebView {
+    private func isDragzone(_ loc: NSPoint) -> Bool {
+        loc.y < 30   // isFlipped 语义: y 从顶算
+    }
+    override func mouseDown(with event: NSEvent) {
+        let loc = convert(event.locationInWindow, from: nil)
+        if isDragzone(loc) {
+            window?.performDrag(with: event)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+}
+
 /// 历史综合统计窗口: 标准 titled 窗口(红绿灯/缩放), 从 widget"历史综合统计 ⤢"打开。
 /// 主悬浮窗保持收起态不动; 单例复用, 关闭后可再开。
 final class DashWindowController: NSObject, NSWindowDelegate, WKNavigationDelegate {
@@ -198,22 +215,40 @@ final class DashWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         let w = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = "Codex 历史综合统计"
-        w.isReleasedWhenClosed = false   // 关闭只 orderOut 不销毁: 销毁会撞上关窗动画(崩溃实测)
+        w.isReleasedWhenClosed = false   // 关闭只 orderOut 不销毁: 锁毁会撞上关窗动画(崩溃实测)
         w.delegate = self
-        // 大面板用实底深色(玻璃透壁纸在大窗上显虚,用户反馈); titlebar 保留系统样式
-        w.isOpaque = true
-        w.backgroundColor = NSColor(red: 0.055, green: 0.075, blue: 0.11, alpha: 1.0)
-        w.titlebarAppearsTransparent = false
-        let wv = WKWebView(frame: NSRect(origin: .zero, size: frame.size))
-        wv.setValue(false, forKey: "drawsBackground")  // 透出窗口实底色
+        // 大面板用实底深色(玻璃透壁纸在大窗上显虚,用户反馈)
+        // 玻璃与悬浮窗完全同配方: hudWindow+behindWindow+50%黑tint(亮度兜底)
+        w.titlebarAppearsTransparent = true
+        w.styleMask.insert(.fullSizeContentView)
+        w.titleVisibility = .hidden
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        let wv = DashDragWebView(frame: NSRect(origin: .zero, size: frame.size))
+        wv.setValue(false, forKey: "drawsBackground")  // 透出玻璃
         wv.underPageBackgroundColor = .clear
         wv.autoresizingMask = [.width, .height]
         wv.navigationDelegate = self
-        w.contentView = wv
-        // loading 占位: 页面就绪前避免空白窗口 (实测首载 ~300ms) — 实底与窗口一致
-        let load = NSView(frame: frame)
+        let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: frame.size))
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.autoresizingMask = [.width, .height]
+        // 与悬浮窗同款 50% 黑 tint(白壁纸兜底) — 直角, 大窗不圆角
+        let tint = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
+        tint.autoresizingMask = [.width, .height]
+        effect.addSubview(tint)
+        effect.addSubview(wv)   // wv 必须挂进层级(在 tint 之上)
+        w.contentView = effect
+        // loading 占位: 页面就绪前避免空白窗口 (实测首载 ~300ms) — 同款玻璃+tint
+        let load = NSVisualEffectView(frame: frame)
+        load.material = .hudWindow
+        load.blendingMode = .behindWindow
+        load.state = .active
         load.wantsLayer = true
-        load.layer?.backgroundColor = NSColor(red: 0.055, green: 0.075, blue: 0.11, alpha: 1.0).cgColor
         load.autoresizingMask = [.width, .height]
         let tip = NSTextField(labelWithString: "加载中…")
         tip.font = NSFont.systemFont(ofSize: 13, weight: .medium)

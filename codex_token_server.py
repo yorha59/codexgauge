@@ -794,24 +794,24 @@ HTML_PAGE = """<!DOCTYPE html>
   body, body * { text-shadow: 0 1px 3px rgba(0,0,0,0.9); }  /* 与悬浮窗一致的文字阴影 */
   html { scrollbar-width: none; }
   body::-webkit-scrollbar { display:none; }
-  .header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:22px; }
+  .header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:22px; padding-left:78px; }  /* 78pt 让位红绿灯 */
   h1 { font-size:20px; font-weight:600; }
   .meta { color:#8b949e; font-size:13px; }
-  .cards { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; margin-bottom:24px; }
-  .card { background:rgba(255,255,255,0.045); border:1px solid rgba(255,255,255,0.09); border-radius:10px; padding:16px 18px; }
+  .cards { display:grid; grid-template-columns:repeat(2,1fr); column-gap:40px; row-gap:2px; margin-bottom:10px; }
+  .card { padding:2px 0 14px; }  /* 扁平化: 与悬浮窗一致, 无区域框 */
   .card .label { color:#8b949e; font-size:12px; margin-bottom:7px; }
   .card .value { font-size:25px; font-weight:700; font-variant-numeric:tabular-nums; }
   .card .sub { color:#8b949e; font-size:12px; margin-top:5px; }
   .accent-blue{color:#58a6ff;} .accent-purple{color:#bc8cff;} .accent-orange{color:#d29922;} .accent-green{color:#3fb950;}
   .adv { border-radius:10px; padding:10px 14px; font-size:12.5px; margin-bottom:10px; line-height:1.8; }
-  .adv.wm { color:#f0b649; border:1px solid rgba(240,182,73,.4); background:rgba(240,182,73,.07); }
+  .adv.wm { color:#f0b649; border-left:2px solid rgba(240,182,73,.55); background:transparent; border-radius:0; }  /* 扁平: 细左线无框 */
   .adv .why { color:#58a6ff; font-size:11.5px; margin-left:4px; }
   .adv .whybox { display:none; margin-top:8px; padding:10px 12px; border-left:2px solid rgba(240,182,73,.5);
                  color:#c9d1d9; font-size:12px; line-height:1.9; background:rgba(0,0,0,0.18); border-radius:0 6px 6px 0; }
   .adv .whybox.open { display:block; }
   .adv .whybox .src { color:#8b949e; font-size:11px; }
-  .adv.cx { color:#ff8182; border:1px solid rgba(255,129,130,.35); background:rgba(255,129,130,.06); margin-top:-4px; }
-  .panel { background:rgba(255,255,255,0.045); border:1px solid rgba(255,255,255,0.09); border-radius:10px; padding:20px; margin-bottom:20px; }
+  .adv.cx { color:#ff8182; border-left:2px solid rgba(255,129,130,.5); background:transparent; border-radius:0; margin-top:-4px; }  /* 扁平: 细左线无框 */
+  .panel { padding:4px 0 0; margin-bottom:24px; }  /* 扁平化: 无区域框 */
   .chart-title { font-size:15px; font-weight:600; margin-bottom:16px; }
   .chart { display:flex; align-items:flex-end; gap:3px; height:200px; }
   .bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; height:100%; justify-content:flex-end; cursor:pointer; }
