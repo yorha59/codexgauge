@@ -9,7 +9,7 @@ English | [中文](README.zh-CN.md)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Zero telemetry](https://img.shields.io/badge/network-localhost%20only-3fb950)
 
-![demo](docs/hero.jpg)
+![demo](docs/demo.gif)
 
 A floating macOS dashboard for [OpenAI Codex](https://developers.openai.com/codex/) usage: **live burn rate, cache TTL countdown, and session-split advice computed from your own session history** — in a frosted-glass panel that stays out of your way.
 

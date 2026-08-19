@@ -9,7 +9,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![零遥测](https://img.shields.io/badge/network-localhost%20only-3fb950)
 
-![demo](docs/hero.jpg)
+![demo](docs/demo.gif)
 
 macOS 悬浮仪表盘，专为 [OpenAI Codex](https://developers.openai.com/codex/) 用量设计：**实时消耗速率、缓存 TTL 倒计时、基于你自己会话历史重放的拆分建议** —— 毛玻璃悬浮窗，不打扰，但一直在。
 
