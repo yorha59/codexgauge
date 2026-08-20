@@ -12,8 +12,10 @@ rm -rf build/CodexGauge.app
 mkdir -p build/CodexGauge.app/Contents/{MacOS,Resources}
 
 # 1. 编译 widget (服务端为 python 脚本, 打进 Resources)
-swiftc -O codex_widget_app.swift -o build/CodexGauge.app/Contents/MacOS/CodexGauge \
+# SWIFT_FLAGS: 交叉编译用, 如 --target x86_64-apple-macos13 (产物文件名按目标架构命名)
+swiftc -O ${SWIFT_FLAGS:-} codex_widget_app.swift -o build/CodexGauge.app/Contents/MacOS/CodexGauge \
     -framework WebKit -framework Cocoa
+if [ -n "${SWIFT_FLAGS:-}" ]; then ARCH="x64"; fi
 
 # 2. 资源: server + 脚本 + launchd plists (安装时由 install.sh 落位)
 cp codex_token_server.py codex_token_report.py codex_token_dashboard.py codex-token-monitor.sh \

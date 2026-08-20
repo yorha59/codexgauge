@@ -6,29 +6,36 @@ on:
 
 jobs:
   build-dmg:
+    runs-on: macos-14
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14        # Apple Silicon
-            arch: arm64
-          - os: macos-13        # Intel
-            arch: x64
-    runs-on: ${{ matrix.os }}
+          - arch: arm64
+            target: ''
+          - arch: x64
+            target: '--target x86_64-apple-macos13'
     steps:
       - uses: actions/checkout@v4
 
       - name: Build DMG (${{ matrix.arch }})
+        env:
+          SWIFT_FLAGS: ${{ matrix.target }}
         run: ./scripts/build-dmg.sh dist
 
       - name: Smoke test — binary starts
+        if: matrix.arch == 'arm64'
         run: |
           file build/CodexGauge.app/Contents/MacOS/CodexGauge
           build/CodexGauge.app/Contents/MacOS/CodexGauge & PID=$!
           sleep 3
           if kill -0 $PID 2>/dev/null; then echo "process alive ✓"; kill $PID; else echo "process died ✗"; exit 1; fi
+
+      - name: Smoke test — x64 binary arch (cross-compiled, can't run on arm runner)
+        if: matrix.arch == 'x64'
+        run: file build/CodexGauge.app/Contents/MacOS/CodexGauge | grep x86_64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
