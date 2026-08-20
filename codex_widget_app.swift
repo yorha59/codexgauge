@@ -11,20 +11,20 @@ import WebKit
 final class DraggableWebView: WKWebView {
     var onSingleClick: (() -> Void)?   // 仅右键菜单"展开/收起"项使用
     weak var host: PanelDelegate?
+    // JS 上报的可点元素矩形(逻辑坐标, 窗口左上原点): mouseDown 时同步判"拖 vs 透传"
+    var hitzones: [NSRect] = []
 
-    // 把手区: 顶部标题条(前 30pt), 右侧留 150pt 给 acts 热区(历史综合统计⤢+时钟整块, x≈172 起)。
-    // 注意 isFlipped=true: loc.y 从顶部算起, 顶部 = loc.y < 30。
-    // 60pt 时期按钮文字左半(x 194~262)被把手吞掉, 点击开不了窗——实测修正。
-    private func isDragzone(_ loc: NSPoint) -> Bool {
-        loc.y < 30 && loc.x < bounds.width - 150
+    private func inHitzones(_ loc: NSPoint) -> Bool {
+        hitzones.contains { $0.contains(NSPoint(x: loc.x, y: loc.y)) }
     }
 
+    // 整体可拖: 除 JS 上报的可点元素(acts热区/标签/柱状图等)外, 任意位置按住即拖
     override func mouseDown(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
-        if isDragzone(loc) {
-            window?.performDrag(with: event)
+        if inHitzones(loc) {
+            super.mouseDown(with: event)   // 透传给 DOM
         } else {
-            super.mouseDown(with: event)   // 透传给 DOM: 按钮/柱状图/滚动
+            window?.performDrag(with: event)
         }
     }
 
@@ -356,6 +356,7 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate
         web.configuration.userContentController.add(self, name: "expand")
         // JS → 原生: 点击黄标"建议拆分"弹拆分理由浮窗
         web.configuration.userContentController.add(self, name: "popreason")
+        web.configuration.userContentController.add(self, name: "hitzones")
         web.setValue(false, forKey: "drawsBackground")
         web.underPageBackgroundColor = .clear
         web.autoresizingMask = [.width, .height]
@@ -375,6 +376,13 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate
                 DashWindowController.shared.open(near: panel?.frame)
             } else if message.body as? String == "closedash" {
                 DashWindowController.shared.close()
+            }
+        }
+        if message.name == "hitzones" {
+            // JS 上报可点元素矩形(页面逻辑坐标, 顶左原点): [x,y,w,h] 数组的数组
+            if let arr = message.body as? [[Double]] {
+                web.hitzones = arr.map { NSRect(x: $0.count > 0 ? $0[0] : 0, y: $0.count > 1 ? $0[1] : 0,
+                                                width: $0.count > 2 ? $0[2] : 0, height: $0.count > 3 ? $0[3] : 0) }
             }
         }
         if message.name == "popreason" {

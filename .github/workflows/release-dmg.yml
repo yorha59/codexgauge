@@ -1,0 +1,43 @@
+name: Release DMG
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-dmg:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # Apple Silicon
+            arch: arm64
+          - os: macos-13        # Intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build DMG (${{ matrix.arch }})
+        run: ./scripts/build-dmg.sh dist
+
+      - name: Smoke test — binary starts
+        run: |
+          file build/CodexGauge.app/Contents/MacOS/CodexGauge
+          build/CodexGauge.app/Contents/MacOS/CodexGauge & PID=$!
+          sleep 3
+          if kill -0 $PID 2>/dev/null; then echo "process alive ✓"; kill $PID; else echo "process died ✗"; exit 1; fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexGauge-${{ matrix.arch }}
+          path: dist/*.dmg
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          generate_release_notes: true

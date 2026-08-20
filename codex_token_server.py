@@ -98,6 +98,16 @@ def _extract(result, need_meta, line):
                 result["cwd"] = str(p["cwd"])
             need_meta = not (result["session_id"] and result["cwd"])
         return need_meta
+    if '"type":"turn_context"' in line or '"type": "turn_context"' in line:
+        try:
+            d = json.loads(line)
+            m = (d.get("payload") or {}).get("model")
+            if m:
+                result["models"][str(m)] = result["models"].get(str(m), 0) + 1
+        except json.JSONDecodeError:
+            pass
+        return need_meta
+
     if "total_token_usage" not in line:
         return need_meta  # 快路径：非 usage 行不进 JSON 解析
     try:
@@ -135,10 +145,10 @@ def parse_session_file(path: Path):
         return cached[4]
 
     # 增量续读条件：同一 inode 且文件未收缩；否则从头整读
-    result = {"session_id": "", "cwd": "", "events": []}
+    result = {"session_id": "", "cwd": "", "events": [], "models": {}}
     start_offset = 0
     if cached and st.st_ino == cached[2] and st.st_size >= cached[3]:
-        result = cached[4]
+        result = cached[4] if "models" in cached[4] else {**cached[4], "models": {}}
         start_offset = cached[3]
 
     need_meta = not (result["session_id"] and result["cwd"])
@@ -233,10 +243,12 @@ def _compute_aggregate():
             evs = p["events"]
             return evs[-1][1] if evs else 0
         auth = max(parsed_list, key=last_cum)
-        meta = {"cwd": "", "files": len(parsed_list)}
+        meta = {"cwd": "", "files": len(parsed_list), "models": {}}
         for p in parsed_list:
             if not meta["cwd"] and p.get("cwd"):
                 meta["cwd"] = p["cwd"]
+            for m, c in (p.get("models") or {}).items():
+                meta["models"][m] = meta["models"].get(m, 0) + c
         sessions_meta[sid] = meta
 
         prev = None
@@ -362,6 +374,7 @@ def build_rate():
     """
     with _lock:
         events = list(_rate_state["events"])
+    _, _, meta_models = collect_all()
     now = time.time()
     windows = {}
     for w, sec in (("1m", 60), ("5m", 300), ("15m", 900)):
@@ -425,9 +438,12 @@ def build_rate():
         # 闲置 >30min 且水位高 → cache 已过期，重启首需全价重读
         expired = idle > 1800
         restart_cr = round(ctx * 0.9 * 125 / 1e6, 1) if (expired and ctx > 50e3) else 0.0
+        mm = (meta_models.get(sid, {}) or {}).get("models", {})
+        model = sorted(mm, key=mm.get)[-1] if mm else ""   # 出现最多的模型
         sessions.append({
             "session_id": sid[:8],
             "title": titles.get(sid, "") or sid[:8],
+            "model": model,
             "input_5m": a["input"], "cached_pct": round(a["cached"] / a["input"] * 100, 1) if a["input"] else 0.0,
             "idle_sec": idle,
             "live": any(sid.endswith(t) or t.endswith(sid) for t in live),
@@ -500,6 +516,7 @@ def build_sessions_for_date(date_str: str):
             "project": project,
             "title": titles.get(sid, "") or f"session {sid[:8]}",
             "files": meta.get("files", 1),
+            "models": meta.get("models", {}),
             "input": a["input"], "cached": a.get("cached", 0), "output": a["output"],
             "total": a["input"] + a["output"],
         })
@@ -562,6 +579,7 @@ WIDGET_PAGE = """<!DOCTYPE html><html lang="zh-CN">
   .ses .row .n { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#c9d1d9; }
   .ses .row .r { font-variant-numeric:tabular-nums; white-space:nowrap; }
   .ses .row .pct { color:#3fb950; }
+  .mdl { color:#58a6ff; font-size:9px; margin-left:3px; opacity:.75; }  /* 会话当前模型短名 */
   .idle { color:#484f58 !important; }
 </style>
 </head>
@@ -613,7 +631,9 @@ async function tick(){
       const idle = s.idle_sec<90 ? '' : ' idle';
       const liveMark = s.live ? ' ●' : '';
       const rTxt = s.input_5m>0 ? fmt(s.input_5m)+'<span class="pct"> '+s.cached_pct+'%</span>' : '<span style="color:#484f58">--</span>';
-      sh += '<div class="row'+idle+'"><div class="n">'+s.title.replace(/</g,'&lt;').slice(0,26)+liveMark+'</div>'
+      const mdlName = s.model ? (s.model.startsWith('gpt-') ? s.model.slice(4).replace('-',' ') : s.model).replace(/</g,'&lt;') : '';
+      const mdl = mdlName ? ' <span class="mdl">'+mdlName+'</span>' : '';
+      sh += '<div class="row'+idle+'"><div class="n">'+s.title.replace(/</g,'&lt;').slice(0,26)+liveMark+mdl+'</div>'
         +'<div class="r">'+rTxt+'</div></div>';
       // 水位/缓存建议行（点击黄色标签展开理由: 事件委托, 见 ses click 监听）
       let hints = '';
@@ -630,7 +650,20 @@ async function tick(){
       }
       if (hints) sh += '<div class="hint">'+hints+'</div>';
     });
-    document.getElementById('ses').onclick = e => {
+    // 向原生上报可点元素矩形: mouseDown 不在这些矩形内 → 整窗拖拽
+  // 选择器: acts 热区(历史统计按钮+时钟) / 水位标签 / cache 绿标 / 会话行(点行=详情) / 速率柱(hover 提示)
+  function reportHitzones() {
+    try {
+      const sels = ['.hdr .acts', '.tag.wm', '.tag.ck', '.ses .row', '.spark div'];
+      const zs = [];
+      for (const sel of sels) document.querySelectorAll(sel).forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) zs.push([r.left, r.top, r.width, r.height]);
+      });
+      window.webkit.messageHandlers.hitzones.postMessage(zs);
+    } catch(err) {}
+  }
+  document.getElementById('ses').onclick = e => {
       const wm = e.target.closest('.tag.wm');
       // 点击黄标 → 原生弹窗展示拆分理由 (点击时实时水位快照)
       if (wm) {
@@ -645,6 +678,7 @@ async function tick(){
     };
     document.getElementById('ses').innerHTML = sh || '<div class="row"><div class="n" style="color:#484f58">无活跃会话</div></div>';
     document.getElementById('dot').className = 'dot' + (d.live_count>0?'':' off');
+    reportHitzones();
     let qh = '';
     if (d.quota) {
       const pct = d.quota.used_pct, plan = d.quota.plan || '';
@@ -813,6 +847,7 @@ HTML_PAGE = """<!DOCTYPE html>
   .adv.cx { color:#ff8182; border-left:2px solid rgba(255,129,130,.5); background:transparent; border-radius:0; margin-top:-4px; }  /* 扁平: 细左线无框 */
   .panel { padding:4px 0 0; margin-bottom:24px; }  /* 扁平化: 无区域框 */
   .chart-title { font-size:15px; font-weight:600; margin-bottom:16px; }
+  .mdl-cell { color:#58a6ff; font-size:12px; opacity:.8; white-space:nowrap; }  /* 模型列 */
   .chart { display:flex; align-items:flex-end; gap:3px; height:200px; }
   .bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; height:100%; justify-content:flex-end; cursor:pointer; }
   .bar { width:100%; border-radius:3px 3px 0 0; background:linear-gradient(180deg,#58a6ff,#1f6feb); min-height:2px; transition:height .3s; position:relative; }
@@ -950,11 +985,14 @@ async function loadDetail(date) {
   try {
     const r = await fetch('/api/sessions?date=' + date);
     const d = await r.json();
-    let html = '<table><tr><th>当天活跃时段</th><th>项目</th><th>会话</th><th>标题</th>' +
+    let html = '<table><tr><th>当天活跃时段</th><th>项目</th><th>会话</th><th>标题</th><th>模型</th>' +
       '<th class="num">当天 input</th><th class="num">cache命中</th><th class="num">当天 output</th><th class="num">当天总计</th></tr>';
     d.sessions.forEach(s => {
+      const models = Object.keys(s.models || {}).sort((a,b)=>(s.models[b]||0)-(s.models[a]||0))
+        .map(m => m.replace(/</g,'&lt;')).join(' · ');
       html += '<tr><td>' + s.time + '</td><td class="proj">' + esc(s.project) + '</td>' +
         '<td class="sid">' + s.session_id + '</td><td class="msg" title="' + esc(s.title) + '">' + esc(s.title) + '</td>' +
+        '<td class="mdl-cell">' + models + '</td>' +
         '<td class="num">' + fmt(s.input) + '</td>' +
         '<td class="num" style="color:#3fb950">' + fmt(s.cached) + ' (' + pct(s.cached, s.input) + ')</td>' +
         '<td class="num">' + fmt(s.output) + '</td><td class="num"><b>' + fmt(s.total) + '</b></td></tr>';
