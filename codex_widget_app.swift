@@ -28,8 +28,13 @@ final class DraggableWebView: WKWebView {
         }
     }
 
+    var onShrink: (() -> Void)?   // 缩成气泡
+
     override func rightMouseDown(with event: NSEvent) {
         let menu = NSMenu()
+        let shrink = NSMenuItem(title: "缩成气泡",
+                                action: #selector(shrinkAction), keyEquivalent: "")
+        shrink.target = self
         let toggle = NSMenuItem(title: "打开历史综合统计",
                                 action: #selector(toggleAction), keyEquivalent: "")
         toggle.target = self
@@ -46,6 +51,7 @@ final class DraggableWebView: WKWebView {
         NSApp.deactivate()
     }
 
+    @objc func shrinkAction() { onShrink?() }
     @objc func reloadAction() { reload() }
     @objc func quitAction() { NSApp.terminate(nil) }
     @objc func toggleAction() { onSingleClick?() }
@@ -300,6 +306,118 @@ final class DashWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
     }
 }
 
+/// 气泡专用 webview: mouseDown 阻断式判"点 vs 拖" — 位移<4pt 松手=点击恢复, 否则 performDrag(系统级, 灵敏)
+final class BubbleWebView: WKWebView {
+    var onRestore: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        let start = NSEvent.mouseLocation
+        let deadline = Date().addingTimeInterval(10)
+        // 事件循环里等 mouseUp / dragDetect, 不回 runloop 默认模式(防 WKWebView 抢事件)
+        while true {
+            guard let ev = NSApp.nextEvent(matching: [.leftMouseUp, .leftMouseDragged],
+                                           until: deadline, inMode: .eventTracking, dequeue: true) else { break }
+            if ev.type == .leftMouseUp {
+                if hypot(NSEvent.mouseLocation.x - start.x, NSEvent.mouseLocation.y - start.y) < 4 {
+                    onRestore?()
+                }
+                return
+            }
+            // 首次 drag → 立刻转系统拖拽(把当前事件塞回队列给 performDrag 用)
+            NSApp.postEvent(ev, atStart: true)
+            window?.performDrag(with: event)
+            return
+        }
+    }
+}
+
+/// 迷你气泡窗: 主悬浮窗「缩成气泡」后的形态。长条, 只展示速率+cache命中率。
+/// 点击=恢复主窗; 拖动=移动(位移>5px 判拖, 与点击区分); 位置独立记忆。
+final class BubbleWindow: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    static let shared = BubbleWindow()
+    var panel: NSPanel?
+    var web: WKWebView?
+    static let originKey = "codexBubbleOrigin"
+
+    func show(near host: NSRect) {
+        if panel == nil {
+            let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 190, height: 30),
+                            styleMask: [.nonactivatingPanel, .borderless],
+                            backing: .buffered, defer: false)
+            p.isFloatingPanel = true
+            p.level = .floating
+            p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            p.isOpaque = false
+            p.backgroundColor = .clear
+            p.hasShadow = true
+            p.isMovable = false
+            // 玻璃底与主悬浮窗同配方
+            let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: NSSize(width: 190, height: 30)))
+            effect.material = .hudWindow
+            effect.blendingMode = .behindWindow
+            effect.state = .active
+            effect.wantsLayer = true
+            effect.layer?.cornerRadius = 8
+            let tint = NSView(frame: effect.bounds)
+            tint.wantsLayer = true
+            tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
+            tint.layer?.cornerRadius = 8
+            let wv = BubbleWebView(frame: effect.bounds)
+            wv.setValue(false, forKey: "drawsBackground")
+            wv.underPageBackgroundColor = .clear
+            wv.navigationDelegate = self
+            wv.onRestore = { [weak self] in
+                self?.hide()
+                NotificationCenter.default.post(name: .init("codexUnshrink"), object: nil)
+            }
+            effect.addSubview(tint)
+            effect.addSubview(wv)
+            p.contentView = effect
+            panel = p
+            web = wv
+        }
+        // 位置: 独立记忆, 无记忆则贴主窗原位顶部
+        let size = NSSize(width: 190, height: 30)
+        var origin = NSPoint(x: host.minX, y: host.minY + host.height - 30)
+        if let saved = UserDefaults.standard.string(forKey: Self.originKey) {
+            let pt = NSPointFromString(saved)
+            if (pt.x != 0 || pt.y != 0) && Self.onScreen(pt, size: size) { origin = pt }
+        }
+        panel?.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel?.orderFrontRegardless()
+        web?.load(URLRequest(url: URL(string: "http://127.0.0.1:8790/bubble")!))
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+        web?.stopLoading()
+    }
+
+    static func onScreen(_ p: NSPoint, size: NSSize) -> Bool {
+        NSScreen.screens.contains { $0.visibleFrame.intersects(NSRect(origin: p, size: size)) }
+    }
+
+    // bubble 页消息: 内容宽度自适应(fitw); 点击/拖拽已由 BubbleWebView 原生接管
+    func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "expand" else { return }
+        let body = message.body as? String ?? ""
+        if body.hasPrefix("fitw:") {
+            // 内容宽度自适应: 保住左下角, 只调宽
+            if let w = Float(body.dropFirst("fitw:".count)), let p = panel, w > 40, abs(Float(p.frame.width) - w) > 1 {
+                let o = p.frame.origin
+                p.setFrame(NSRect(x: o.x, y: o.y, width: CGFloat(w), height: p.frame.height), display: true)
+                if let eff = p.contentView {
+                    eff.setFrameSize(NSSize(width: CGFloat(w), height: eff.bounds.height))
+                    for sub in eff.subviews { sub.setFrameSize(NSSize(width: CGFloat(w), height: eff.bounds.height)) }
+                }
+            }
+        }
+    }
+
+    // 拖拽/点击已由 BubbleWebView 原生接管(mouseDown 阻断式判定), 无需 JS 注入
+
+}
+
 final class PanelDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSWindowDelegate, WKScriptMessageHandler {
     var panel: NSPanel!
     var web: DraggableWebView!
@@ -312,6 +430,9 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate
     let dashURL   = URL(string: "http://127.0.0.1:8790/")!
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        NotificationCenter.default.addObserver(forName: .init("codexUnshrink"), object: nil, queue: .main) { [weak self] _ in
+            self?.panel?.orderFrontRegardless()
+        }
         let size = NSSize(width: 324, height: 480)   // 页面加载后按内容自适应
 
         panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
@@ -352,6 +473,11 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate
         web.navigationDelegate = self
         web.host = self
         web.onSingleClick = { [weak self] in self?.toggleMode() }
+        web.onShrink = { [weak self] in
+            guard let f = self?.panel?.frame else { return }
+            BubbleWindow.shared.show(near: f)
+            self?.panel?.orderOut(nil)
+        }
         // JS → 原生: widget 页"图表 ⤢"按钮 / 面板页"收起"按钮
         web.configuration.userContentController.add(self, name: "expand")
         // JS → 原生: 点击黄标"建议拆分"弹拆分理由浮窗
@@ -372,11 +498,21 @@ final class PanelDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate
     // 网页按钮消息: "expand" = 开历史统计新窗口(主悬浮窗不动), "closedash" = 关新窗口
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "expand" {
-            if message.body as? String == "expand" {
+            let body = message.body as? String ?? ""
+            if body == "expand" {
                 DashWindowController.shared.open(near: panel?.frame)
-            } else if message.body as? String == "closedash" {
+            } else if body == "closedash" {
                 DashWindowController.shared.close()
+            } else if body == "shrink" {
+                BubbleWindow.shared.show(near: panel?.frame ?? .zero)
+                panel?.orderOut(nil)
+            } else if body == "unshrink" {
+                // 主窗自己不会发 unshrink, 兜底
+                panel?.orderFrontRegardless()
             }
+        }
+        if message.name == "unshrinkN" {
+            panel?.orderFrontRegardless()
         }
         if message.name == "hitzones" {
             // JS 上报可点元素矩形(页面逻辑坐标, 顶左原点): [x,y,w,h] 数组的数组

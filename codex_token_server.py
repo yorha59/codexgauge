@@ -524,6 +524,56 @@ def build_sessions_for_date(date_str: str):
     return {"date": date_str, "count": len(out), "sessions": out}
 
 
+BUBBLE_PAGE = """
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  html,body { margin:0; padding:0; background:transparent; font-family:-apple-system,"SF Pro Text","PingFang SC",sans-serif; }
+  body { color:#e6edf3; overflow:hidden; white-space:nowrap; -webkit-user-select:none; cursor:pointer; }
+  body { min-width:fit-content; }
+  .bar { display:flex; align-items:baseline; gap:6px; padding:5px 12px; font-size:11px; width:fit-content; }
+  .r { color:#f0a45d; font-weight:700; font-size:13px; font-variant-numeric:tabular-nums; }
+  .r.idle { color:#6e7681; }
+  .u { color:#8b949e; font-size:10px; }
+  .dot2 { color:#6e7681; font-size:11px; }
+  .ck { color:#3fb950; font-weight:700; font-size:12px; font-variant-numeric:tabular-nums; }
+  .ck.off { color:#484f58; }
+</style></head>
+<body>
+  <div class="bar" id="bar">
+    <span class="r idle" id="v-rate">--</span><span class="u">tok/s</span>
+    <span class="dot2">·</span>
+    <span class="u">cache</span><span class="ck off" id="v-ck">--</span>
+  </div>
+<script>
+let dead = 0;
+async function tick() {
+  try {
+    const d = await (await fetch('/api/rate')).json();
+    const r = document.getElementById('v-rate');
+    const w = d.windows['1m'];
+    const v = w && (w.tokens_per_sec || 0);
+    r.textContent = v >= 1000 ? (v/1000).toFixed(v>=10000?0:1).replace(/\.0$/,'') + 'K' : String(Math.round(v));
+    r.className = 'r' + (v > 0 ? '' : ' idle');
+    const ck = document.getElementById('v-ck');
+    const cp = d.windows['1m'].cached_pct;
+    if (w && w.input > 0 && cp != null && cp > 0) { ck.textContent = cp + '%'; ck.className = 'ck'; }
+    else { ck.textContent = '--'; ck.className = 'ck off'; }
+    dead = 0;
+  } catch(e) { if (++dead > 3) { document.getElementById('v-rate').textContent = '--'; } }
+}
+tick(); setInterval(tick, 5000);
+// 内容宽变化 → 通知原生窗自适应(防截断)
+function fitWidth() {
+  try {
+    const w = Math.ceil(document.getElementById('bar').getBoundingClientRect().width);
+    window.webkit.messageHandlers.expand.postMessage('fitw:' + w);
+  } catch(err) {}
+}
+setInterval(fitWidth, 1000); fitWidth();
+</script>
+</body></html>
+"""
+
 WIDGET_PAGE = """<!DOCTYPE html><html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -584,7 +634,7 @@ WIDGET_PAGE = """<!DOCTYPE html><html lang="zh-CN">
 </style>
 </head>
 <body>
-  <div class="hdr"><div class="t"><span class="dot" id="dot"></span>Codex 实时消耗</div><div class="acts" id="btn-expand"><span class="btn">历史综合统计 ⤢</span> <span class="clock" id="clock"></span></div></div>
+  <div class="hdr"><div class="t"><span class="dot" id="dot"></span>Codex 实时消耗</div><div class="acts"><span class="btn" id="btn-shrink" title="缩成气泡">缩小</span> <span class="btn" id="btn-expand">历史综合统计 ⤢</span> <span class="clock" id="clock"></span></div></div>
   <div class="rate" id="ratebox"><div class="v" id="v-rate">--</div><div class="u">tokens/s（1m 窗口）</div></div>
   <div class="sub" id="sub"></div>
   <div class="spark" id="spark"></div>
@@ -708,6 +758,10 @@ let _suppressClick = false;
 document.addEventListener('click', e => {
   if (_suppressClick) { e.stopPropagation(); e.preventDefault(); _suppressClick = false; }
 }, true);
+// 缩小按钮: 通知原生壳收成长条气泡
+document.getElementById('btn-shrink').addEventListener('click', e => {
+  try { window.webkit.messageHandlers.expand.postMessage('shrink'); } catch(err) {}
+});
 // 历史综合统计按钮: 通知原生壳开新窗口 (主悬浮窗保持不动)
 document.getElementById('btn-expand').addEventListener('click', e => {
   e.stopPropagation();
@@ -1019,6 +1073,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index"):
             self._send(200, "text/html; charset=utf-8", HTML_PAGE.encode("utf-8"))
+        elif parsed.path == "/bubble":
+            self._send(200, "text/html; charset=utf-8", BUBBLE_PAGE.encode("utf-8"))
         elif parsed.path == "/widget":
             self._send(200, "text/html; charset=utf-8", WIDGET_PAGE.encode("utf-8"))
         elif parsed.path == "/reason":
