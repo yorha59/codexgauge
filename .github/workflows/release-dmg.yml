@@ -16,13 +16,13 @@ jobs:
           - arch: arm64
             target: ''
           - arch: x64
-            target: '--target x86_64-apple-macos13'
+            target: 'x86_64-apple-macos13'
     steps:
       - uses: actions/checkout@v4
 
       - name: Build DMG (${{ matrix.arch }})
         env:
-          SWIFT_FLAGS: ${{ matrix.target }}
+          SWIFT_TARGET: ${{ matrix.target }}
         run: ./scripts/build-dmg.sh dist
 
       - name: Smoke test — binary starts
